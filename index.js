@@ -88,22 +88,200 @@ socket.on('connect_error', (err) => {
   }
 });
 
-// If EVENTS env provided, listen only to those; otherwise, log everything with onAny
-if (EVENTS.length > 0) {
-  console.log('Subscribing to events:', EVENTS.join(', '));
-  EVENTS.forEach(evt => {
-    socket.on(evt, (data) => {
-      console.log('Event:', evt, JSON.stringify(data));
+// Forwarding setup
+const axios = require('axios');
+const BACKEND_URL = process.env.BACKEND_URL || '';
+const BACKEND_API_KEY = process.env.BACKEND_API_KEY || '';
+const FORWARD_EVENTS = (process.env.FORWARD_EVENTS || '').split(',').map(s => s.trim()).filter(Boolean);
+const INCLUDE_RAW = (process.env.INCLUDE_RAW || 'false').toLowerCase() === 'true';
+const RAW_MAX = parseInt(process.env.RAW_MAX, 10) || 512;
+
+function pickInstance(payload) {
+  return (payload && (payload.instance || payload.instanceName || payload.data?.instance)) || 'unknown';
+}
+
+function formatEvent(eventName, payload) {
+  // Official normalized envelope v1
+  // { version, event, id?, type?, instance, receivedAt, actor?, body, meta, raw }
+  const MAX_RAW = RAW_MAX; // controlled by env; default 512 bytes
+
+  function safeStringify(obj, maxLen = MAX_RAW) {
+    try {
+      const s = JSON.stringify(obj);
+      return s.length > maxLen ? s.slice(0, maxLen) + '...<truncated>' : s;
+    } catch (e) {
+      try { return String(obj).slice(0, maxLen); } catch (e2) { return '<unserializable>'; }
+    }
+  }
+
+  function extractMessage(m) {
+    // m may be a message object from Evolution events — extract common fields
+    if (!m) return null;
+    const id = m.id || m._id || m.messageId || null;
+    const from = m.from || m.author || m.sender || null;
+    const to = m.to || m.recipients || null;
+    const text = m.text || m.body || (m.content && (m.content.text || m.content.body)) || null;
+    const ts = m.timestamp || m.ts || m.createdAt || null;
+    const attachments = Array.isArray(m.attachments) ? m.attachments.map(a => ({ type: a.type, url: a.url, name: a.name })) : (m.attachments ? ['<unknown-attachments>'] : []);
+    return { id, from, to, text, ts, attachmentsCount: attachments.length, attachments };
+  }
+
+  function extractContact(c) {
+    if (!c) return null;
+    return {
+      id: c.id || c._id || c.contactId || null,
+      name: c.name || c.fullName || c.displayName || null,
+      phones: [].concat(c.phone || c.phones || []).filter(Boolean),
+      emails: [].concat(c.email || c.emails || []).filter(Boolean),
+    };
+  }
+
+  // Minimal envelope (only include necessary fields)
+  const envelope = {
+    version: '1.0',
+    event: eventName,
+    receivedAt: new Date().toISOString(),
+    instance: pickInstance(payload),
+    // id/type/actor may be set per-event below
+    id: null,
+    type: null,
+    actor: null,
+    // body should contain only the minimal useful data per event
+    body: null,
+    // small meta with only essential routing info
+    meta: {},
+  };
+
+  try {
+    // Event-specific normalization
+    switch (eventName) {
+      case 'messages.upsert': {
+        // payload may be { message: {...} } or the message itself
+        const msg = payload?.message || payload;
+        const m = extractMessage(msg);
+        envelope.id = m?.id || null;
+        envelope.type = 'message';
+        envelope.actor = m?.from || null;
+        // Minimal message body: id, from, text snippet, timestamp, attachmentsCount
+        envelope.id = m?.id || null;
+        envelope.type = 'message';
+        envelope.actor = m?.from || null;
+        envelope.body = {
+          id: m?.id || null,
+          from: m?.from || null,
+          snippet: (m?.text && String(m.text).slice(0, 256)) || null,
+          timestamp: m?.ts || null,
+          attachmentsCount: m?.attachmentsCount || 0,
+        };
+        if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
+        break;
+      }
+      case 'contacts.update': {
+        const contact = payload?.contact || payload;
+        const c = extractContact(contact);
+        envelope.id = c?.id || null;
+        envelope.type = 'contact';
+        // Minimal contact: id, name, up to 3 phones, up to 2 emails
+        envelope.body = {
+          id: c?.id || null,
+          name: c?.name || null,
+          phones: (c?.phones || []).slice(0, 3),
+          emails: (c?.emails || []).slice(0, 2),
+        };
+        if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
+        break;
+      }
+      case 'chats.update': {
+        const chat = payload?.chat || payload;
+        envelope.id = chat?.id || chat?._id || null;
+        envelope.type = 'chat';
+        envelope.body = {
+          id: envelope.id,
+          title: chat?.title || chat?.name || null,
+          participantsCount: Array.isArray(chat?.participants) ? chat.participants.length : null,
+        };
+        if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
+        break;
+      }
+      default: {
+        // Generic attempt to pick useful fields
+        envelope.type = typeof payload === 'object' && payload !== null ? (payload.type || payload.eventType || 'generic') : typeof payload;
+        // For generic events keep only top-level keys that are small and useful
+        envelope.body = (function genericBody(p) {
+          if (!p) return null;
+          const small = {};
+          const keys = Object.keys(p).slice(0, 6); // pick up to 6 keys
+          keys.forEach(k => {
+            try {
+              const v = p[k];
+              // skip large arrays/objects
+              if (typeof v === 'string' && v.length > 512) small[k] = String(v).slice(0, 128) + '...';
+              else if (Array.isArray(v)) small[k] = v.slice(0, 3);
+              else if (typeof v === 'object' && v !== null) small[k] = '<object>'; else small[k] = v;
+            } catch (e) { small[k] = '<unserializable>'; }
+          });
+          return small;
+        })(payload);
+        if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
+      }
+    }
+  } catch (e) {
+    // If normalization fails, fallback to minimal envelope
+    envelope.body = null;
+    envelope.meta.error = 'normalization_failed';
+    envelope.meta.normalizationError = String(e);
+  }
+
+  return envelope;
+}
+
+async function sendToBackend(formatted) {
+  if (!BACKEND_URL) {
+    console.warn('BACKEND_URL not configured — skipping forward');
+    return;
+  }
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (BACKEND_API_KEY) headers['Authorization'] = `Bearer ${BACKEND_API_KEY}`;
+
+  const maxTries = 3;
+  for (let attempt = 1; attempt <= maxTries; attempt++) {
+    try {
+      await axios.post(BACKEND_URL, formatted, { headers, timeout: 5000 });
+      console.log('Forwarded event', formatted.event, 'instance=', formatted.instance);
+      return;
+    } catch (err) {
+      console.error(`Forward attempt ${attempt} failed:`, err && err.message ? err.message : err);
+      if (attempt < maxTries) await new Promise(r => setTimeout(r, 1000 * attempt));
+      else console.error('Giving up forwarding event after max attempts');
+    }
+  }
+}
+
+// If FORWARD_EVENTS set, subscribe only to those; otherwise, forward all via onAny
+if (FORWARD_EVENTS.length > 0) {
+  console.log('Subscribing and forwarding events:', FORWARD_EVENTS.join(', '));
+  FORWARD_EVENTS.forEach(evt => {
+    socket.on(evt, async (data) => {
+      try {
+        const formatted = formatEvent(evt, data);
+        console.log('Event:', evt, formatted.instance);
+        await sendToBackend(formatted);
+      } catch (e) {
+        console.error('Error handling event', evt, e);
+      }
     });
   });
 } else {
-  console.log('No EVENTS env provided — logging all events via socket.onAny');
-  socket.onAny((event, ...args) => {
+  console.log('No FORWARD_EVENTS env provided — handling all events via socket.onAny');
+  socket.onAny(async (event, ...args) => {
     try {
       const payload = args.length === 1 ? args[0] : args;
-      console.log(`Event received: ${event} ->`, JSON.stringify(payload));
+      const formatted = formatEvent(event, payload);
+      console.log(`Event received: ${event} -> instance=${formatted.instance}`);
+      await sendToBackend(formatted);
     } catch (e) {
-      console.log('Event received:', event, args);
+      console.error('Error processing event', event, e);
     }
   });
 }
