@@ -1,5 +1,5 @@
-require('dotenv').config();
-const { io } = require('socket.io-client');
+require("dotenv").config();
+const { io } = require("socket.io-client");
 
 /*
   Contract:
@@ -8,19 +8,28 @@ const { io } = require('socket.io-client');
   - Errors: will exit if WEBSOCKET_ENABLED != 'true' or EVOLUTION_API_URL missing
 */
 
-const WEBSOCKET_ENABLED = (process.env.WEBSOCKET_ENABLED || '').toLowerCase() === 'true';
-const WEBSOCKET_GLOBAL_EVENTS = (process.env.WEBSOCKET_GLOBAL_EVENTS || '').toLowerCase() === 'true';
+const WEBSOCKET_ENABLED =
+  (process.env.WEBSOCKET_ENABLED || "").toLowerCase() === "true";
+const WEBSOCKET_GLOBAL_EVENTS =
+  (process.env.WEBSOCKET_GLOBAL_EVENTS || "").toLowerCase() === "true";
 const EVOLUTION_API_URL = process.env.EVOLUTION_API_URL; // e.g. https://api.yoursite.com or wss://...
-const INSTANCE_NAME = process.env.INSTANCE_NAME || '';
-const EVENTS = (process.env.EVENTS || '').split(',').map(s => s.trim()).filter(Boolean); // optional list of events
+const INSTANCE_NAME = process.env.INSTANCE_NAME || "";
+const EVENTS = (process.env.EVENTS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean); // optional list of events
 
 if (!WEBSOCKET_ENABLED) {
-  console.log('WEBSOCKET_ENABLED is not true. Exiting. Set WEBSOCKET_ENABLED=true to enable WebSocket listening.');
+  console.log(
+    "WEBSOCKET_ENABLED is not true. Exiting. Set WEBSOCKET_ENABLED=true to enable WebSocket listening."
+  );
   process.exit(0);
 }
 
 if (!EVOLUTION_API_URL) {
-  console.error('EVOLUTION_API_URL is not set. Please set it in the environment or .env file.');
+  console.error(
+    "EVOLUTION_API_URL is not set. Please set it in the environment or .env file."
+  );
   process.exit(1);
 }
 
@@ -28,28 +37,32 @@ let connectUrl = EVOLUTION_API_URL;
 if (!WEBSOCKET_GLOBAL_EVENTS) {
   // traditional mode requires instance name
   if (!INSTANCE_NAME) {
-    console.error('WEBSOCKET_GLOBAL_EVENTS is false (traditional mode). INSTANCE_NAME must be provided.');
+    console.error(
+      "WEBSOCKET_GLOBAL_EVENTS is false (traditional mode). INSTANCE_NAME must be provided."
+    );
     process.exit(1);
   }
   // append instance name to the path (ensure no duplicate slashes)
   try {
     const urlObj = new URL(EVOLUTION_API_URL);
     // preserve origin and append pathname
-    let basePath = urlObj.pathname === '/' ? '' : urlObj.pathname.replace(/\/$/, '');
+    let basePath =
+      urlObj.pathname === "/" ? "" : urlObj.pathname.replace(/\/$/, "");
     urlObj.pathname = `${basePath}/${INSTANCE_NAME}`;
     connectUrl = urlObj.toString();
   } catch (err) {
     // EVOLUTION_API_URL might be a bare wss://host without trailing slash; just concat safely
-    connectUrl = `${EVOLUTION_API_URL.replace(/\/$/, '')}/${INSTANCE_NAME}`;
+    connectUrl = `${EVOLUTION_API_URL.replace(/\/$/, "")}/${INSTANCE_NAME}`;
   }
 }
 
-console.log('Connecting to Evolution API WebSocket at', connectUrl);
+console.log("Connecting to Evolution API WebSocket at", connectUrl);
 
 // Allow polling fallback by default to handle servers that block websocket upgrades.
 // To avoid noisy websocket upgrade probe errors, when ALLOW_POLLING=true we use
 // polling-only (no upgrade) by default. Set ALLOW_POLLING=false to force websocket-only.
-const ALLOW_POLLING = (process.env.ALLOW_POLLING || 'true').toString().toLowerCase() === 'true';
+const ALLOW_POLLING =
+  (process.env.ALLOW_POLLING || "true").toString().toLowerCase() === "true";
 
 const socketOpts = {
   reconnectionAttempts: 5,
@@ -58,46 +71,62 @@ const socketOpts = {
 
 if (ALLOW_POLLING) {
   // Use polling-only and disable upgrade probe to avoid websocket upgrade errors
-  socketOpts.transports = ['polling'];
+  socketOpts.transports = ["polling"];
   socketOpts.upgrade = false;
 } else {
-  socketOpts.transports = ['websocket'];
+  socketOpts.transports = ["websocket"];
   socketOpts.upgrade = true;
 }
 
 const socket = io(connectUrl, socketOpts);
 
-socket.on('connect', () => {
-  console.log('Connected. socket id =', socket.id);
+socket.on("connect", () => {
+  console.log("Connected. socket id =", socket.id);
 });
 
-socket.on('disconnect', (reason) => {
-  console.log('Disconnected from server. Reason:', reason);
+socket.on("disconnect", (reason) => {
+  console.log("Disconnected from server. Reason:", reason);
 });
 
-socket.on('connect_error', (err) => {
-  console.error('Connection error:', err && err.message ? err.message : err);
+socket.on("connect_error", (err) => {
+  console.error("Connection error:", err && err.message ? err.message : err);
   try {
-    if (err && err.data) console.error('connect_error.data =', err.data);
+    if (err && err.data) console.error("connect_error.data =", err.data);
     // If ws transport produced an http response (e.g. 400) the underlying
     // error object may contain more details; print them for debugging.
-    console.error('connect_error (full):');
+    console.error("connect_error (full):");
     console.dir(err, { depth: null });
   } catch (e) {
-    console.error('Error logging connect_error details:', e);
+    console.error("Error logging connect_error details:", e);
   }
 });
 
 // Forwarding setup
-const axios = require('axios');
-const BACKEND_URL = process.env.BACKEND_URL || '';
-const BACKEND_API_KEY = process.env.BACKEND_API_KEY || '';
-const FORWARD_EVENTS = (process.env.FORWARD_EVENTS || '').split(',').map(s => s.trim()).filter(Boolean);
-const INCLUDE_RAW = (process.env.INCLUDE_RAW || 'false').toLowerCase() === 'true';
+const axios = require("axios");
+const BACKEND_URL = process.env.BACKEND_URL || "";
+const BACKEND_API_KEY = process.env.BACKEND_API_KEY || "";
+// Read auth values from env. Support either BACKEND_* names or the Laravel-style
+// EVOLUTION_* names so you can reuse the same .env values.
+const FORWARDER_API_KEY =
+  process.env.BACKEND_API_KEY || process.env.EVOLUTION_API_KEY || "";
+const FORWARDER_WEBHOOK_SECRET =
+  process.env.BACKEND_WEBHOOK_SECRET ||
+  process.env.EVOLUTION_WEBHOOK_SECRET ||
+  "";
+const FORWARD_EVENTS = (process.env.FORWARD_EVENTS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const INCLUDE_RAW =
+  (process.env.INCLUDE_RAW || "false").toLowerCase() === "true";
 const RAW_MAX = parseInt(process.env.RAW_MAX, 10) || 512;
 
 function pickInstance(payload) {
-  return (payload && (payload.instance || payload.instanceName || payload.data?.instance)) || 'unknown';
+  return (
+    (payload &&
+      (payload.instance || payload.instanceName || payload.data?.instance)) ||
+    "unknown"
+  );
 }
 
 function formatEvent(eventName, payload) {
@@ -108,9 +137,13 @@ function formatEvent(eventName, payload) {
   function safeStringify(obj, maxLen = MAX_RAW) {
     try {
       const s = JSON.stringify(obj);
-      return s.length > maxLen ? s.slice(0, maxLen) + '...<truncated>' : s;
+      return s.length > maxLen ? s.slice(0, maxLen) + "...<truncated>" : s;
     } catch (e) {
-      try { return String(obj).slice(0, maxLen); } catch (e2) { return '<unserializable>'; }
+      try {
+        return String(obj).slice(0, maxLen);
+      } catch (e2) {
+        return "<unserializable>";
+      }
     }
   }
 
@@ -120,10 +153,26 @@ function formatEvent(eventName, payload) {
     const id = m.id || m._id || m.messageId || null;
     const from = m.from || m.author || m.sender || null;
     const to = m.to || m.recipients || null;
-    const text = m.text || m.body || (m.content && (m.content.text || m.content.body)) || null;
+    const text =
+      m.text ||
+      m.body ||
+      (m.content && (m.content.text || m.content.body)) ||
+      null;
     const ts = m.timestamp || m.ts || m.createdAt || null;
-    const attachments = Array.isArray(m.attachments) ? m.attachments.map(a => ({ type: a.type, url: a.url, name: a.name })) : (m.attachments ? ['<unknown-attachments>'] : []);
-    return { id, from, to, text, ts, attachmentsCount: attachments.length, attachments };
+    const attachments = Array.isArray(m.attachments)
+      ? m.attachments.map((a) => ({ type: a.type, url: a.url, name: a.name }))
+      : m.attachments
+      ? ["<unknown-attachments>"]
+      : [];
+    return {
+      id,
+      from,
+      to,
+      text,
+      ts,
+      attachmentsCount: attachments.length,
+      attachments,
+    };
   }
 
   function extractContact(c) {
@@ -138,7 +187,7 @@ function formatEvent(eventName, payload) {
 
   // Minimal envelope (only include necessary fields)
   const envelope = {
-    version: '1.0',
+    version: "1.0",
     event: eventName,
     receivedAt: new Date().toISOString(),
     instance: pickInstance(payload),
@@ -155,16 +204,16 @@ function formatEvent(eventName, payload) {
   try {
     // Event-specific normalization
     switch (eventName) {
-      case 'messages.upsert': {
+      case "messages.upsert": {
         // payload may be { message: {...} } or the message itself
         const msg = payload?.message || payload;
         const m = extractMessage(msg);
         envelope.id = m?.id || null;
-        envelope.type = 'message';
+        envelope.type = "message";
         envelope.actor = m?.from || null;
         // Minimal message body: id, from, text snippet, timestamp, attachmentsCount
         envelope.id = m?.id || null;
-        envelope.type = 'message';
+        envelope.type = "message";
         envelope.actor = m?.from || null;
         envelope.body = {
           id: m?.id || null,
@@ -176,11 +225,11 @@ function formatEvent(eventName, payload) {
         if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
         break;
       }
-      case 'contacts.update': {
+      case "contacts.update": {
         const contact = payload?.contact || payload;
         const c = extractContact(contact);
         envelope.id = c?.id || null;
-        envelope.type = 'contact';
+        envelope.type = "contact";
         // Minimal contact: id, name, up to 3 phones, up to 2 emails
         envelope.body = {
           id: c?.id || null,
@@ -191,34 +240,44 @@ function formatEvent(eventName, payload) {
         if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
         break;
       }
-      case 'chats.update': {
+      case "chats.update": {
         const chat = payload?.chat || payload;
         envelope.id = chat?.id || chat?._id || null;
-        envelope.type = 'chat';
+        envelope.type = "chat";
         envelope.body = {
           id: envelope.id,
           title: chat?.title || chat?.name || null,
-          participantsCount: Array.isArray(chat?.participants) ? chat.participants.length : null,
+          participantsCount: Array.isArray(chat?.participants)
+            ? chat.participants.length
+            : null,
         };
         if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
         break;
       }
       default: {
         // Generic attempt to pick useful fields
-        envelope.type = typeof payload === 'object' && payload !== null ? (payload.type || payload.eventType || 'generic') : typeof payload;
+        envelope.type =
+          typeof payload === "object" && payload !== null
+            ? payload.type || payload.eventType || "generic"
+            : typeof payload;
         // For generic events keep only top-level keys that are small and useful
         envelope.body = (function genericBody(p) {
           if (!p) return null;
           const small = {};
           const keys = Object.keys(p).slice(0, 6); // pick up to 6 keys
-          keys.forEach(k => {
+          keys.forEach((k) => {
             try {
               const v = p[k];
               // skip large arrays/objects
-              if (typeof v === 'string' && v.length > 512) small[k] = String(v).slice(0, 128) + '...';
+              if (typeof v === "string" && v.length > 512)
+                small[k] = String(v).slice(0, 128) + "...";
               else if (Array.isArray(v)) small[k] = v.slice(0, 3);
-              else if (typeof v === 'object' && v !== null) small[k] = '<object>'; else small[k] = v;
-            } catch (e) { small[k] = '<unserializable>'; }
+              else if (typeof v === "object" && v !== null)
+                small[k] = "<object>";
+              else small[k] = v;
+            } catch (e) {
+              small[k] = "<unserializable>";
+            }
           });
           return small;
         })(payload);
@@ -228,7 +287,7 @@ function formatEvent(eventName, payload) {
   } catch (e) {
     // If normalization fails, fallback to minimal envelope
     envelope.body = null;
-    envelope.meta.error = 'normalization_failed';
+    envelope.meta.error = "normalization_failed";
     envelope.meta.normalizationError = String(e);
   }
 
@@ -237,43 +296,50 @@ function formatEvent(eventName, payload) {
 
 async function sendToBackend(formatted) {
   if (!BACKEND_URL) {
-    console.warn('BACKEND_URL not configured — skipping forward');
+    console.warn("BACKEND_URL not configured — skipping forward");
     return;
   }
 
-  const headers = { 'Content-Type': 'application/json' };
-  if (BACKEND_API_KEY) headers['Authorization'] = `Bearer ${BACKEND_API_KEY}`;
+  const headers = { "Content-Type": "application/json" };
+  // Build the two headers requested: x-webhook-secret and x-evolution-api-key.
+  // Only include them when present in the environment.
+  if (FORWARDER_WEBHOOK_SECRET)
+  headers["x-webhook-secret"] = FORWARDER_WEBHOOK_SECRET;
+  if (FORWARDER_API_KEY)
+  headers["x-evolution-api-key"] = FORWARDER_API_KEY;
 
-  const maxTries = 3;
+  const maxTries = 2;
   for (let attempt = 1; attempt <= maxTries; attempt++) {
     try {
       await axios.post(BACKEND_URL, formatted, { headers, timeout: 5000 });
-      console.log('Forwarded event', formatted.event, 'instance=', formatted.instance);
+
       return;
     } catch (err) {
-      console.error(`Forward attempt ${attempt} failed:`, err && err.message ? err.message : err);
-      if (attempt < maxTries) await new Promise(r => setTimeout(r, 1000 * attempt));
-      else console.error('Giving up forwarding event after max attempts');
+      if (attempt < maxTries)
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      else console.error("Giving up forwarding event after max attempts");
     }
   }
 }
 
 // If FORWARD_EVENTS set, subscribe only to those; otherwise, forward all via onAny
 if (FORWARD_EVENTS.length > 0) {
-  console.log('Subscribing and forwarding events:', FORWARD_EVENTS.join(', '));
-  FORWARD_EVENTS.forEach(evt => {
+  console.log("Subscribing and forwarding events:", FORWARD_EVENTS.join(", "));
+  FORWARD_EVENTS.forEach((evt) => {
     socket.on(evt, async (data) => {
       try {
         const formatted = formatEvent(evt, data);
-        console.log('Event:', evt, formatted.instance);
+        console.log("Event:", evt, formatted.instance);
         await sendToBackend(formatted);
       } catch (e) {
-        console.error('Error handling event', evt, e);
+        console.error("Error handling event", evt, e);
       }
     });
   });
 } else {
-  console.log('No FORWARD_EVENTS env provided — handling all events via socket.onAny');
+  console.log(
+    "No FORWARD_EVENTS env provided — handling all events via socket.onAny"
+  );
   socket.onAny(async (event, ...args) => {
     try {
       const payload = args.length === 1 ? args[0] : args;
@@ -281,20 +347,20 @@ if (FORWARD_EVENTS.length > 0) {
       console.log(`Event received: ${event} -> instance=${formatted.instance}`);
       await sendToBackend(formatted);
     } catch (e) {
-      console.error('Error processing event', event, e);
+      console.error("Error processing event", event, e);
     }
   });
 }
 
 // graceful shutdown
 function shutdown() {
-  console.log('Shutting down: disconnecting socket...');
+  console.log("Shutting down: disconnecting socket...");
   if (socket && socket.connected) socket.disconnect();
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 // keep process alive
 setInterval(() => {}, 1 << 30);
