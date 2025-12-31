@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Evolution API – WebSocket Debug + Messages</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, Arial;
+      padding: 20px;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    input[type=text] {
+      padding: 6px 8px;
+      width: 320px;
+    }
+    button {
+      padding: 8px 12px;
+    }
+    #log {
+      width: 100%;
+      height: 480px;
+      border: 1px solid #ccc;
+      padding: 8px;
+      overflow: auto;
+      white-space: pre-wrap;
+      background: #fafafa;
+    }
+  </style>
+</head>
+<body>
+
+<h2>Evolution API – WebSocket Debug + Messages</h2>
+
+<div class="controls">
+  <input id="url" type="text" value="wss://eva.hero.delivery" />
+  <input id="instance" type="text" placeholder="Instance (leave empty = global)" />
+  <input id="token" type="text" placeholder="Auth token (optional)" />
+  <button id="connect">Connect</button>
+  <button id="disconnect" disabled>Disconnect</button>
+</div>
+
+<strong>Log</strong>
+<div id="log"></div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<script>
+  const logEl = document.getElementById('log');
+  const urlEl = document.getElementById('url');
+  const instanceEl = document.getElementById('instance');
+  const tokenEl = document.getElementById('token');
+  const connectBtn = document.getElementById('connect');
+  const disconnectBtn = document.getElementById('disconnect');
+
+  let socket;
+
+  function log(...args) {
+    const line = args.map(v =>
+      typeof v === 'string' ? v : JSON.stringify(v, null, 2)
+    ).join(' ');
+    logEl.textContent = `${new Date().toISOString()} ${line}\n` + logEl.textContent;
+    console.log(...args);
+  }
+
+  function buildUrl() {
+    let base = urlEl.value.trim().replace(/\/$/, '');
+    const inst = instanceEl.value.trim();
+    return inst ? `${base}/${encodeURIComponent(inst)}` : base;
+  }
+
+  connectBtn.onclick = () => {
+    const url = buildUrl();
+    log('CONNECT ATTEMPT →', url);
+
+    const opts = {
+      transports: ['websocket'],   // WS only (required for Evolution)
+      upgrade: false,
+      reconnection: false,
+      timeout: 20000,
+    };
+
+    if (tokenEl.value.trim()) {
+      opts.auth = { token: tokenEl.value.trim() };
+    }
+
+    socket = io(url, opts);
+
+    // ===== socket.io =====
+    socket.on('connect', () => {
+      log('SOCKET.IO CONNECTED ✔️', socket.id);
+      connectBtn.disabled = true;
+      disconnectBtn.disabled = false;
+    });
+
+    socket.on('disconnect', (reason) => {
+      log('SOCKET.IO DISCONNECTED ❌', reason);
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+    });
+
+    socket.on('connect_error', (err) => {
+      log('SOCKET.IO connect_error ❗', err.message);
+      console.error(err);
+    });
+
+    // ===== EVENTS & MESSAGE HANDLING =====
+    socket.onAny((event, ...args) => {
+      const payload = args.length === 1 ? args[0] : args;
+
+      const instance =
+        payload?.instance ||
+        payload?.instanceName ||
+        payload?.data?.instance ||
+        'unknown';
+
+      // --- MESSAGE EVENTS ---
+      if (event === 'messages.upsert') {
+        const messages = payload?.messages || [];
+
+        messages.forEach(msg => {
+          const fromMe = msg?.key?.fromMe === true;
+          const jid = msg?.key?.remoteJid || 'unknown';
+
+          const text =
+            msg?.message?.conversation ||
+            msg?.message?.extendedTextMessage?.text ||
+            msg?.message?.imageMessage?.caption ||
+            msg?.message?.videoMessage?.caption ||
+            msg?.message?.documentMessage?.caption ||
+            '[non-text message]';
+
+          log(
+            `💬 MESSAGE`,
+            `| INSTANCE: ${instance}`,
+            `| ${fromMe ? 'SENT →' : 'RECEIVED ←'}`,
+            `| JID: ${jid}`,
+            `| TEXT: "${text}"`
+          );
+        });
+
+        return;
+      }
+
+      // --- OTHER EVENTS ---
+      log(
+        `📡 EVENT: ${event}`,
+        `| INSTANCE: ${instance}`
+      );
+    });
+
+    // ===== engine.io (debug) =====
+    const engine = socket.io.engine;
+
+    engine.on('open', () => {
+      log('ENGINE open ✔️ transport=', engine.transport.name);
+    });
+
+    engine.on('close', (reason) => {
+      log('ENGINE close ❌', reason);
+    });
+
+    engine.on('ping', () => log('ENGINE ping →'));
+    engine.on('pong', (latency) => log('ENGINE pong ← latency=', latency));
+
+    // ===== raw WebSocket =====
+    engine.once('open', () => {
+      const ws = engine.transport.ws;
+      if (!ws) return;
+
+      log('RAW WS state:', ws.readyState);
+
+      ws.addEventListener('close', e => {
+        log('RAW WS CLOSE ❌ code=', e.code, 'reason=', e.reason);
+      });
+    });
+  };
+
+  disconnectBtn.onclick = () => {
+    if (!socket) return;
+    log('Manual disconnect');
+    socket.disconnect();
+  };
+</script>
+
+</body>
+</html>

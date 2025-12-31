@@ -1,0 +1,21 @@
+{
+  "name": "evolution-ws-listener",
+  "version": "1.0.0",
+  "description": "Small Node.js app to listen to the Evolution API WebSocket (socket.io)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "serve": "node server.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "express": "^4.22.1",
+    "socket.io-client": "^4.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}
