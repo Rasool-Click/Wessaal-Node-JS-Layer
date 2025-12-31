@@ -283,6 +283,40 @@ function formatEvent(eventName, payload) {
         })(payload);
         if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
       }
+      case "qrcode.updated": {
+        // For QR code events we send the full event payload (no shrinking).
+        // This preserves all properties the Evolution service provides for QR codes.
+        envelope.type = "qrcode";
+        try {
+          envelope.body = payload;
+        } catch (e) {
+          envelope.body = null;
+          envelope.meta.normalizationError = String(e);
+        }
+        // Include an untruncated raw payload so the receiver can inspect everything.
+        try {
+          envelope.raw = JSON.stringify(payload);
+        } catch (e) {
+          envelope.raw = safeStringify(payload, MAX_RAW);
+        }
+        break;
+      }
+      case "connection.update": {
+        // For connection.update events we also want the full payload (no shrinking).
+        envelope.type = "connection";
+        try {
+          envelope.body = payload;
+        } catch (e) {
+          envelope.body = null;
+          envelope.meta.normalizationError = String(e);
+        }
+        try {
+          envelope.raw = JSON.stringify(payload);
+        } catch (e) {
+          envelope.raw = safeStringify(payload, MAX_RAW);
+        }
+        break;
+      }
     }
   } catch (e) {
     // If normalization fails, fallback to minimal envelope
@@ -304,9 +338,8 @@ async function sendToBackend(formatted) {
   // Build the two headers requested: x-webhook-secret and x-evolution-api-key.
   // Only include them when present in the environment.
   if (FORWARDER_WEBHOOK_SECRET)
-  headers["x-webhook-secret"] = FORWARDER_WEBHOOK_SECRET;
-  if (FORWARDER_API_KEY)
-  headers["x-evolution-api-key"] = FORWARDER_API_KEY;
+    headers["x-webhook-secret"] = FORWARDER_WEBHOOK_SECRET;
+  if (FORWARDER_API_KEY) headers["x-evolution-api-key"] = FORWARDER_API_KEY;
 
   const maxTries = 2;
   for (let attempt = 1; attempt <= maxTries; attempt++) {
