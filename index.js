@@ -284,6 +284,40 @@ function formatEvent(eventName, payload) {
         })(payload);
         if (INCLUDE_RAW) envelope.raw = safeStringify(payload);
       }
+      case "qrcode.updated": {
+        // For QR code events we send the full event payload (no shrinking).
+        // This preserves all properties the Evolution service provides for QR codes.
+        envelope.type = "qrcode";
+        try {
+          envelope.body = payload;
+        } catch (e) {
+          envelope.body = null;
+          envelope.meta.normalizationError = String(e);
+        }
+        // Include an untruncated raw payload so the receiver can inspect everything.
+        try {
+          envelope.raw = JSON.stringify(payload);
+        } catch (e) {
+          envelope.raw = safeStringify(payload, MAX_RAW);
+        }
+        break;
+      }
+      case "connection.update": {
+        // For connection.update events we also want the full payload (no shrinking).
+        envelope.type = "connection";
+        try {
+          envelope.body = payload;
+        } catch (e) {
+          envelope.body = null;
+          envelope.meta.normalizationError = String(e);
+        }
+        try {
+          envelope.raw = JSON.stringify(payload);
+        } catch (e) {
+          envelope.raw = safeStringify(payload, MAX_RAW);
+        }
+        break;
+      }
     }
   } catch (e) {
     // If normalization fails, fallback to minimal envelope
