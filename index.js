@@ -1,5 +1,6 @@
 require("dotenv").config();
 const { io } = require("socket.io-client");
+const { emitToInstance } = require("./server");
 
 /*
   Contract:
@@ -105,6 +106,14 @@ socket.on("connect_error", (err) => {
 const axios = require("axios");
 const BACKEND_URL = process.env.BACKEND_URL || "";
 const BACKEND_API_KEY = process.env.BACKEND_API_KEY || "";
+// Read auth values from env. Support either BACKEND_* names or the Laravel-style
+// EVOLUTION_* names so you can reuse the same .env values.
+const FORWARDER_API_KEY =
+  process.env.BACKEND_API_KEY || process.env.EVOLUTION_API_KEY || "";
+const FORWARDER_WEBHOOK_SECRET =
+  process.env.BACKEND_WEBHOOK_SECRET ||
+  process.env.EVOLUTION_WEBHOOK_SECRET ||
+  "";
 const FORWARD_EVENTS = (process.env.FORWARD_EVENTS || "")
   .split(",")
   .map((s) => s.trim())
@@ -293,24 +302,19 @@ async function sendToBackend(formatted) {
   }
 
   const headers = { "Content-Type": "application/json" };
-  if (BACKEND_API_KEY) headers["Authorization"] = `Bearer ${BACKEND_API_KEY}`;
+  // Build the two headers requested: x-webhook-secret and x-evolution-api-key.
+  // Only include them when present in the environment.
+  if (FORWARDER_WEBHOOK_SECRET)
+    headers["x-webhook-secret"] = FORWARDER_WEBHOOK_SECRET;
+  if (FORWARDER_API_KEY) headers["x-evolution-api-key"] = FORWARDER_API_KEY;
 
-  const maxTries = 3;
+  const maxTries = 2;
   for (let attempt = 1; attempt <= maxTries; attempt++) {
     try {
       await axios.post(BACKEND_URL, formatted, { headers, timeout: 5000 });
-      console.log(
-        "Forwarded event",
-        formatted.event,
-        "instance=",
-        formatted.instance
-      );
+
       return;
     } catch (err) {
-      console.error(
-        `Forward attempt ${attempt} failed:`,
-        err && err.message ? err.message : err
-      );
       if (attempt < maxTries)
         await new Promise((r) => setTimeout(r, 1000 * attempt));
       else console.error("Giving up forwarding event after max attempts");
@@ -327,6 +331,7 @@ if (FORWARD_EVENTS.length > 0) {
         const formatted = formatEvent(evt, data);
         console.log("Event:", evt, formatted.instance);
         await sendToBackend(formatted);
+        emitToInstance(formatted);
       } catch (e) {
         console.error("Error handling event", evt, e);
       }
@@ -342,6 +347,7 @@ if (FORWARD_EVENTS.length > 0) {
       const formatted = formatEvent(event, payload);
       console.log(`Event received: ${event} -> instance=${formatted.instance}`);
       await sendToBackend(formatted);
+      emitToInstance(formatted);
     } catch (e) {
       console.error("Error processing event", event, e);
     }
