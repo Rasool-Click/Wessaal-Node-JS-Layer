@@ -11,7 +11,8 @@ const crypto = require("crypto");
  *  A) Front Socket Server
  ========================= */
 // Prefer platform-provided PORT, fallback to FRONT_WS_PORT, then 4000
-const FRONT_WS_PORT = Number(process.env.PORT || process.env.FRONT_WS_PORT || 4000);
+// const FRONT_WS_PORT = Number(process.env.PORT || process.env.FRONT_WS_PORT || 4000);
+const FRONT_WS_PORT = Number(process.env.FRONT_WS_PORT || 4001);
 const FRONT_ORIGIN = (process.env.FRONT_ORIGIN || "*").split(",").map(s => s.trim()).filter(Boolean);
 const FRONT_WS_PATH = process.env.FRONT_WS_PATH || "/ws"; // mount socket under a path for reverse proxy
 const TRUST_PROXY = (process.env.TRUST_PROXY || "true").toLowerCase() === "true";
