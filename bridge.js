@@ -5,20 +5,29 @@ const http = require("http");
 const { Server } = require("socket.io");
 const { io: evoIo } = require("socket.io-client");
 const axios = require("axios");
+const crypto = require("crypto");
 
 /** =========================
  *  A) Front Socket Server
  ========================= */
-const FRONT_WS_PORT = Number(process.env.FRONT_WS_PORT || 4000);
-const FRONT_ORIGIN = (process.env.FRONT_ORIGIN || "*").split(",");
+// Prefer platform-provided PORT, fallback to FRONT_WS_PORT, then 4000
+const FRONT_WS_PORT = Number(process.env.PORT || process.env.FRONT_WS_PORT || 4000);
+const FRONT_ORIGIN = (process.env.FRONT_ORIGIN || "*").split(",").map(s => s.trim()).filter(Boolean);
+const FRONT_WS_PATH = process.env.FRONT_WS_PATH || "/ws"; // mount socket under a path for reverse proxy
+const TRUST_PROXY = (process.env.TRUST_PROXY || "true").toLowerCase() === "true";
 
 const app = express();
+if (TRUST_PROXY) app.set("trust proxy", 1);
+// Health/Readiness endpoints for production probes
 app.get("/health", (_, res) => res.send("ok"));
+app.get("/ready", (_, res) => res.send("ready"));
 
 const server = http.createServer(app);
 
 const ioFront = new Server(server, {
-  cors: { origin: FRONT_ORIGIN, credentials: true },
+  path: FRONT_WS_PATH,
+  cors: { origin: FRONT_ORIGIN, credentials: true, methods: ["GET", "POST"] },
+  perMessageDeflate: false,
 });
 
 ioFront.on("connection", (socket) => {
@@ -41,7 +50,7 @@ ioFront.on("connection", (socket) => {
 });
 
 server.listen(FRONT_WS_PORT, () => {
-  console.log("✅ Front WS listening on", FRONT_WS_PORT);
+  console.log("✅ Front WS listening on", FRONT_WS_PORT, "path:", FRONT_WS_PATH, "origins:", FRONT_ORIGIN.join(", "));
 });
 
 /** =========================
@@ -85,7 +94,7 @@ console.log("Connecting to Evolution at", connectUrl);
 const ALLOW_POLLING =
   (process.env.ALLOW_POLLING || "true").toLowerCase() === "true";
 
-const socketOpts = { reconnectionAttempts: 5, reconnectionDelay: 2000 };
+const socketOpts = { reconnectionAttempts: 10, reconnectionDelay: 2000 };
 if (ALLOW_POLLING) {
   socketOpts.transports = ["polling"];
   socketOpts.upgrade = false;
@@ -115,6 +124,9 @@ const FORWARDER_WEBHOOK_SECRET =
   process.env.EVOLUTION_WEBHOOK_SECRET ||
   "";
 
+const FORWARD_TIMEOUT_MS = Number(process.env.FORWARD_TIMEOUT_MS || 7000);
+const FORWARD_RETRIES = Number(process.env.FORWARD_RETRIES || 3);
+
 const FORWARD_EVENTS = (process.env.FORWARD_EVENTS || "")
   .split(",")
   .map((s) => s.trim())
@@ -138,6 +150,12 @@ function formatEvent(eventName, payload) {
   };
 }
 
+function mask(val) {
+  if (!val || typeof val !== "string") return "missing";
+  if (val.length <= 6) return "***";
+  return `${val.slice(0, 3)}...${val.slice(-3)}`;
+}
+
 async function sendToBackend(formatted) {
   if (!BACKEND_URL) return;
 
@@ -145,8 +163,38 @@ async function sendToBackend(formatted) {
   if (FORWARDER_WEBHOOK_SECRET)
     headers["x-webhook-secret"] = FORWARDER_WEBHOOK_SECRET;
   if (FORWARDER_API_KEY) headers["x-evolution-api-key"] = FORWARDER_API_KEY;
+  // Add a request id for traceability through proxies
+  headers["x-request-id"] = crypto.randomUUID();
 
-  await axios.post(BACKEND_URL, formatted, { headers, timeout: 5000 });
+  // Masked debug log (safe in production)
+  try {
+    console.log("Forwarding ->", BACKEND_URL, "hdr:", {
+      "x-webhook-secret": mask(FORWARDER_WEBHOOK_SECRET),
+      "x-evolution-api-key": mask(FORWARDER_API_KEY),
+      "x-request-id": headers["x-request-id"],
+    });
+  } catch {}
+
+  let attempt = 0;
+  while (attempt < FORWARD_RETRIES) {
+    try {
+      await axios.post(BACKEND_URL, formatted, {
+        headers,
+        timeout: FORWARD_TIMEOUT_MS,
+        validateStatus: (s) => s >= 200 && s < 500, // don’t retry on 4xx
+      });
+      return;
+    } catch (e) {
+      attempt++;
+      const msg = e?.response ? `HTTP ${e.response.status}` : e?.message || String(e);
+      console.warn(`Forward attempt ${attempt} failed:`, msg);
+      if (attempt >= FORWARD_RETRIES) {
+        console.error("Giving up forwarding event after max attempts");
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1000 * attempt));
+    }
+  }
 }
 
 function emitToFront(formatted) {
@@ -177,4 +225,19 @@ if (FORWARD_EVENTS.length > 0) {
     const payload = args.length === 1 ? args[0] : args;
     handleEvent(evt, payload);
   });
+
+  /** =========================
+   *  D) Graceful Shutdown
+   ========================= */
+  function shutdown(sig) {
+    console.log(`Received ${sig}, shutting down gracefully...`);
+    try { evoSocket.disconnect(); } catch {}
+    try { ioFront.disconnectSockets(true); ioFront.close(); } catch {}
+    server.close(() => {
+      console.log("HTTP server closed.");
+      process.exit(0);
+    });
+  }
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
