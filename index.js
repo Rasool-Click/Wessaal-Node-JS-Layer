@@ -1,6 +1,8 @@
 require("dotenv").config();
 const { io } = require("socket.io-client");
-const { emitToInstance } = require("./server");
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
 
 /*
   Contract:
@@ -19,6 +21,49 @@ const EVENTS = (process.env.EVENTS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean); // optional list of events
+
+// Front Socket Server (for Next.js frontend to subscribe via domain, no port exposure)
+const FRONT_WS_PORT = Number(process.env.PORT || process.env.FRONT_WS_PORT || 4000);
+const FRONT_ORIGIN = (process.env.FRONT_ORIGIN || "*").split(",").map(s => s.trim()).filter(Boolean);
+const FRONT_WS_PATH = process.env.FRONT_WS_PATH || "/ws";
+const TRUST_PROXY = (process.env.TRUST_PROXY || "true").toLowerCase() === "true";
+
+const app = express();
+if (TRUST_PROXY) app.set("trust proxy", 1);
+app.get("/health", (_, res) => res.send("ok"));
+app.get("/ready", (_, res) => res.send("ready"));
+
+const server = http.createServer(app);
+const ioFront = new Server(server, {
+  path: FRONT_WS_PATH,
+  cors: { origin: FRONT_ORIGIN, credentials: true, methods: ["GET", "POST"] },
+  perMessageDeflate: false,
+});
+
+ioFront.on("connection", (socket) => {
+  console.log("✅ Front connected:", socket.id);
+
+  socket.on("join_instance", ({ instance }, cb) => {
+    try {
+      if (!instance) return cb?.({ ok: false, error: "missing_instance" });
+      const room = `inst:${instance}`;
+      socket.join(room);
+      console.log("✅ joined room:", room);
+      return cb?.({ ok: true, room });
+    } catch (e) {
+      return cb?.({ ok: false, error: String(e) });
+    }
+  });
+});
+
+server.listen(FRONT_WS_PORT, () => {
+  console.log("✅ Front WS listening on", FRONT_WS_PORT, "path:", FRONT_WS_PATH, "origins:", FRONT_ORIGIN.join(", "));
+});
+
+function emitToInstance(formatted) {
+  const inst = formatted.instance || "unknown";
+  ioFront.to(`inst:${inst}`).emit("evolution:event", formatted);
+}
 
 if (!WEBSOCKET_ENABLED) {
   console.log(
@@ -392,6 +437,8 @@ if (FORWARD_EVENTS.length > 0) {
 function shutdown() {
   console.log("Shutting down: disconnecting socket...");
   if (socket && socket.connected) socket.disconnect();
+  try { ioFront && ioFront.disconnectSockets(true); ioFront && ioFront.close(); } catch {}
+  try { server && server.close(() => console.log("HTTP server closed.")); } catch {}
   process.exit(0);
 }
 
