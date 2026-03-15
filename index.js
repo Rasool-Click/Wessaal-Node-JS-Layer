@@ -13,7 +13,7 @@ const track = (stage, status, detail = "") => {
   const time = new Date().toLocaleTimeString();
   const icon = status === "ERROR" ? "❌" : status === "SUCCESS" ? "✅" : "ℹ️";
   console.log(
-    `[${time}] ${icon} [${stage.padEnd(10)}] ${status.padEnd(8)} | ${detail}`
+    `[${time}] ${icon} [${stage.padEnd(10)}] ${status.padEnd(8)} | ${detail}`,
   );
 };
 
@@ -30,7 +30,7 @@ const EVENTS = (process.env.EVENTS || "")
 
 // Front Socket Server Config
 const FRONT_WS_PORT = Number(
-  process.env.PORT || process.env.FRONT_WS_PORT || 4000
+  process.env.PORT || process.env.FRONT_WS_PORT || 4000,
 );
 const FRONT_ORIGIN = (process.env.FRONT_ORIGIN || "*")
   .split(",")
@@ -62,7 +62,7 @@ ioFront.on("connection", (socket) => {
         track(
           "FRONT_WS",
           "ERROR",
-          `Join attempt failed: No instance name provided.`
+          `Join attempt failed: No instance name provided.`,
         );
         return cb?.({ ok: false, error: "missing_instance" });
       }
@@ -80,7 +80,7 @@ ioFront.on("connection", (socket) => {
     track(
       "FRONT_WS",
       "INFO",
-      `Browser ${socket.id} disconnected. Reason: ${reason}`
+      `Browser ${socket.id} disconnected. Reason: ${reason}`,
     );
   });
 });
@@ -102,14 +102,14 @@ function emitToInstance(formatted) {
     track(
       "FLOW",
       "FORWARD",
-      `Sending to ${activeListeners} client(s) in room: ${room}`
+      `Sending to ${activeListeners} client(s) in room: ${room}`,
     );
     ioFront.to(room).emit("evolution:event", formatted);
   } else {
     track(
       "FLOW",
       "DROP",
-      `No browser is listening in room: ${room}. Event discarded.`
+      `No browser is listening in room: ${room}. Event discarded.`,
     );
   }
 }
@@ -268,15 +268,39 @@ function formatEvent(eventName, payload) {
   return envelope;
 }
 
+// async function sendToBackend(formatted) {
+//   if (!BACKEND_URL) return;
+//   const headers = { "Content-Type": "application/json" };
+//   if (FORWARDER_WEBHOOK_SECRET)
+//     headers["x-webhook-secret"] = FORWARDER_WEBHOOK_SECRET;
+//   if (FORWARDER_API_KEY) headers["x-evolution-api-key"] = FORWARDER_API_KEY;
+
+//   try {
+//     await axios.post(BACKEND_URL, formatted, { headers, timeout: 5000 });
+//     track("FORWARD", "SUCCESS", `Sent to Webhook: ${BACKEND_URL}`);
+//   } catch (err) {
+//     track("FORWARD", "ERROR", `Webhook failed: ${err.message}`);
+//   }
+// }
 async function sendToBackend(formatted) {
   if (!BACKEND_URL) return;
-  const headers = { "Content-Type": "application/json" };
+  const headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "Wessaal-Node-Layer/1.0", // Add this
+  };
+
   if (FORWARDER_WEBHOOK_SECRET)
     headers["x-webhook-secret"] = FORWARDER_WEBHOOK_SECRET;
   if (FORWARDER_API_KEY) headers["x-evolution-api-key"] = FORWARDER_API_KEY;
 
   try {
-    await axios.post(BACKEND_URL, formatted, { headers, timeout: 5000 });
+    // Increase timeout and disable maxContentLength limits for testing
+    await axios.post(BACKEND_URL, formatted, {
+      headers,
+      timeout: 10000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
     track("FORWARD", "SUCCESS", `Sent to Webhook: ${BACKEND_URL}`);
   } catch (err) {
     track("FORWARD", "ERROR", `Webhook failed: ${err.message}`);
@@ -291,7 +315,7 @@ if (FORWARD_EVENTS.length > 0) {
       track(
         "FLOW",
         "RECEIVE",
-        `Event: ${evt} (Instance: ${formatted.instance})`
+        `Event: ${evt} (Instance: ${formatted.instance})`,
       );
       await sendToBackend(formatted);
       emitToInstance(formatted);
@@ -304,7 +328,7 @@ if (FORWARD_EVENTS.length > 0) {
     track(
       "FLOW",
       "RECEIVE",
-      `Event: ${event} (Instance: ${formatted.instance})`
+      `Event: ${event} (Instance: ${formatted.instance})`,
     );
     await sendToBackend(formatted);
     emitToInstance(formatted);
