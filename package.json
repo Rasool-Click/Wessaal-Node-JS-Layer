@@ -6,14 +6,16 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "serve": "node server.js"
+    "test": "node test.js"
   },
   "author": "",
   "license": "MIT",
   "dependencies": {
     "axios": "^1.4.0",
+    "axios-retry": "^4.5.0",
     "dotenv": "^16.3.1",
     "express": "^4.22.1",
+    "https-proxy-agent": "^5.0.1",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.7.2"
   },
